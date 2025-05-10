@@ -1,23 +1,15 @@
 const winston = require('winston');
 
-const logger = winston.createLogger({
-  level: 'debug',
-  format: winston.format.json(),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
-});
-
 class DataProcessor {
 
-  constructor(pool, logger) {
+  constructor(pool, redis, logger) {
     this.pool = pool;
+    this.redis = redis;
+    this.logger = logger;
   }
 
   async processData(data) {
-    logger.debug('Received data:', {
+    this.logger.debug('Received data:', {
       hasData: !!data,
       dataType: typeof data,
       hasEvents: !!(data && data.events),
@@ -28,7 +20,7 @@ class DataProcessor {
     });
 
     if (!data || !data.events || !Array.isArray(data.events)) {
-      logger.error('Invalid data format:', data);
+      this.logger.error('Invalid data format:', data);
       return;
     }
 
@@ -38,12 +30,12 @@ class DataProcessor {
 
       for (const event of data.events) {
         if (!event.id) {
-          logger.error('Skipping event with missing ID:', event);
+          this.logger.error('Skipping event with missing ID:', event);
           continue;
         }
 
         try {
-          logger.debug('Processing event:', {
+          this.logger.debug('Processing event:', {
             eventId: event.id,
             hasId: !!event.id,
             eventType: typeof event,
@@ -61,8 +53,11 @@ class DataProcessor {
           if (event.odds && Array.isArray(event.odds)) {
             await this.processOdds(connection, event.id, event.odds);
           }
+
+          // Cache the processed event data
+          await this.cacheEventData(event);
         } catch (error) {
-          logger.error('Error processing event:', { event, error: error.message });
+          this.logger.error('Error processing event:', { event, error: error.message });
           continue;
         }
       }
@@ -70,7 +65,7 @@ class DataProcessor {
       await connection.commit();
     } catch (error) {
       await connection.rollback();
-      logger.error('Error processing data:', {
+      this.logger.error('Error processing data:', {
         error: error.message,
         stack: error.stack,
         data: JSON.stringify(data, null, 2)
@@ -81,10 +76,47 @@ class DataProcessor {
     }
   }
 
+  async cacheEventData(event) {
+    try {
+      const eventKey = `event:${event.id}`;
+      const eventData = {
+        id: event.id,
+        sport: event.sport,
+        competition: event.competition,
+        startTime: event.startTime || event.start_time,
+        status: event.status,
+        participants: event.participants || [],
+        odds: event.odds || []
+      };
+
+      // Cache the event data with a 1-hour expiration
+      await this.redis.set(eventKey, JSON.stringify(eventData), {
+        EX: 3600 // 1 hour in seconds
+      });
+
+      // Add to sport index
+      await this.redis.sAdd(`sport:${event.sport}:events`, event.id);
+
+      // Add to competition index
+      await this.redis.sAdd(`competition:${event.competition}:events`, event.id);
+
+      this.logger.debug('Cached event data:', {
+        eventId: event.id,
+        sport: event.sport,
+        competition: event.competition
+      });
+    } catch (error) {
+      this.logger.error('Error caching event data:', {
+        eventId: event.id,
+        error: error.message
+      });
+    }
+  }
+
   async processEvent(connection, event) {
     const eventId = event.id;
 
-    logger.debug('Processing event with ID:', {
+    this.logger.debug('Processing event with ID:', {
       eventId,
       hasId: !!eventId,
       eventType: typeof event,
@@ -92,7 +124,7 @@ class DataProcessor {
     });
 
     if (!eventId) {
-      logger.error('Event missing ID:', JSON.stringify(event, null, 2));
+      this.logger.error('Event missing ID:', JSON.stringify(event, null, 2));
       throw new Error('Event ID is required');
     }
 
@@ -104,7 +136,7 @@ class DataProcessor {
       event.status || 'UNKNOWN'
     ];
 
-    logger.debug('Executing SQL with params:', params);
+    this.logger.debug('Executing SQL with params:', params);
 
     const [result] = await connection.execute(
       `INSERT INTO events (id, sport, competition, start_time, status)
@@ -130,7 +162,7 @@ class DataProcessor {
 
     for (const participant of participants) {
       if (!participant.name) {
-        logger.warn('Skipping participant with missing name');
+        this.logger.warn('Skipping participant with missing name');
         continue;
       }
 
@@ -153,7 +185,7 @@ class DataProcessor {
 
     for (const odd of odds) {
       if (!odd.market_type || !odd.selection || !odd.price) {
-        logger.warn('Skipping invalid odds entry:', odd);
+        this.logger.warn('Skipping invalid odds entry:', odd);
         continue;
       }
 
@@ -171,14 +203,14 @@ class DataProcessor {
   }
 
   validateData(data) {
-    logger.debug('Validating data:', JSON.stringify(data, null, 2));
+    this.logger.debug('Validating data:', JSON.stringify(data, null, 2));
 
     if (!data) {
       throw new Error('No data provided');
     }
 
     if (!data.id) {
-      logger.error('Event missing ID:', JSON.stringify(data, null, 2));
+      this.logger.error('Event missing ID:', JSON.stringify(data, null, 2));
       throw new Error('Event ID is required');
     }
 

@@ -2,6 +2,7 @@ const express = require('express');
 const { Kafka } = require('kafkajs');
 const mysql = require('mysql2/promise');
 const winston = require('winston');
+const { createClient } = require('redis');
 const { DataProcessor } = require('./processors/dataProcessor');
 
 const app = express();
@@ -17,6 +18,12 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
+const redis = createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379'
+});
+
+redis.on('error', (err) => logger.error('Redis Client Error:', err));
+
 const kafka = new Kafka({
   clientId: 'data-processing-service',
   brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',')
@@ -25,16 +32,24 @@ const kafka = new Kafka({
 const consumer = kafka.consumer({ groupId: 'data-processing-group' });
 
 const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.json(),
+  level: process.env.LOG_LEVEL || 'debug',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
   transports: [
-    new winston.transports.Console(),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
     new winston.transports.File({ filename: 'error.log', level: 'error' }),
     new winston.transports.File({ filename: 'combined.log' })
   ]
 });
 
-const dataProcessor = new DataProcessor(pool, logger);
+const dataProcessor = new DataProcessor(pool, redis, logger);
 
 app.use(express.json());
 
@@ -44,16 +59,21 @@ app.get('/health', (req, res) => {
 
 async function connectWithRetry(maxRetries = 5, delay = 5000) {
   let retries = 0;
-  
+
   while (retries < maxRetries) {
     try {
       const connection = await pool.getConnection();
+
       connection.release();
       logger.info('Successfully connected to database');
+
+      await redis.connect();
+      logger.info('Successfully connected to Redis');
+
       return;
     } catch (error) {
       retries++;
-      logger.warn(`Database connection attempt ${retries} failed:`, error);
+      logger.warn(`Connection attempt ${retries} failed:`, error);
       
       if (retries === maxRetries) {
         throw error;
@@ -141,6 +161,7 @@ async function shutdown() {
   try {
     await consumer.disconnect();
     await pool.end();
+    await redis.quit();
     process.exit(0);
   } catch (error) {
     logger.error('Error during shutdown:', error);

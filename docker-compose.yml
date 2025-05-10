@@ -34,10 +34,14 @@ services:
       - MYSQL_PASSWORD=sportsbetpass
       - MYSQL_DATABASE=sportsbet
       - MYSQL_PORT=3307
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
     depends_on:
       mysql:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - sportsbet-network
