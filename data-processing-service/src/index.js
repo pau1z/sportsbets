@@ -78,7 +78,7 @@ async function connectWithRetry(maxRetries = 5, delay = 5000) {
       if (retries === maxRetries) {
         throw error;
       }
-      
+
       logger.info(`Retrying in ${delay/1000} seconds...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -91,8 +91,14 @@ async function start() {
     await consumer.connect();
     logger.info('Connected to Kafka');
 
-    await consumer.subscribe({ topic: 'sports-feed', fromBeginning: true });
-    logger.info('Subscribed to sports-feed topic');
+    const supportedSports = ['football', 'basketball', 'tennis', 'hockey'];
+    const topics = supportedSports.map(sport => `sports-feed-${sport}`);
+
+    await Promise.all(topics.map(topic => 
+      consumer.subscribe({ topic, fromBeginning: true })
+    ));
+
+    logger.info('Subscribed to topics:', topics);
 
     await consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
@@ -114,12 +120,14 @@ async function start() {
               eventsType: value?.events ? typeof value.events : 'none',
               isArray: !!(value?.events && Array.isArray(value.events)),
               eventCount: value?.events?.length || 0,
-              firstEventId: value?.events?.[0]?.id
+              firstEventId: value?.events?.[0]?.id,
+              topic
             });
           } catch (parseError) {
             logger.error('Failed to parse message:', {
               error: parseError.message,
-              message: message.value.toString()
+              message: message.value.toString(),
+              topic
             });
             throw new Error(`Invalid JSON message: ${parseError.message}`);
           }
@@ -132,7 +140,8 @@ async function start() {
             throw new Error('Invalid message format: missing events array');
           }
 
-          await dataProcessor.processData(value);
+          const sport = topic.replace('sports-feed-', '');
+          await dataProcessor.processData(value, sport);
 
         } catch (error) {
           logger.error('Error processing message:', {

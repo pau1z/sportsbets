@@ -6,20 +6,17 @@ class DataProcessor {
     this.pool = pool;
     this.redis = redis;
     this.logger = logger;
+    this.CACHE_TTL = 3600; // 1 hour in seconds
   }
 
-  async processData(data) {
-    this.logger.debug('Received data:', {
-      hasData: !!data,
-      dataType: typeof data,
-      hasEvents: !!(data && data.events),
-      eventsType: data?.events ? typeof data.events : 'none',
-      isArray: !!(data?.events && Array.isArray(data.events)),
-      eventCount: data?.events?.length || 0,
-      firstEventId: data?.events?.[0]?.id
+  async processData(data, sport) {
+    this.logger.debug('Processing batch:', {
+      sport,
+      eventCount: data.events?.length || 0,
+      batchTimestamp: data.headers?.['batch-timestamp']
     });
 
-    if (!data || !data.events || !Array.isArray(data.events)) {
+    if (!data?.events?.length) {
       this.logger.error('Invalid data format:', data);
       return;
     }
@@ -37,27 +34,39 @@ class DataProcessor {
         try {
           this.logger.debug('Processing event:', {
             eventId: event.id,
-            hasId: !!event.id,
+            sport,
             eventType: typeof event,
             eventKeys: Object.keys(event)
           });
+
+          if (event.sport.toLowerCase() !== sport) {
+            this.logger.warn('Event sport mismatch:', {
+              eventSport: event.sport,
+              topicSport: sport,
+              eventId: event.id
+            });
+            continue;
+          }
 
           this.validateData(event);
 
           await this.processEvent(connection, event);
 
-          if (event.participants && Array.isArray(event.participants)) {
+          if (event.participants?.length) {
             await this.processParticipants(connection, event.id, event.participants);
           }
 
-          if (event.odds && Array.isArray(event.odds)) {
+          if (event.odds?.length) {
             await this.processOdds(connection, event.id, event.odds);
           }
 
-          // Cache the processed event data
           await this.cacheEventData(event);
         } catch (error) {
-          this.logger.error('Error processing event:', { event, error: error.message });
+          this.logger.error('Error processing event:', { 
+            event, 
+            error: error.message,
+            sport
+          });
           continue;
         }
       }
@@ -65,10 +74,11 @@ class DataProcessor {
       await connection.commit();
     } catch (error) {
       await connection.rollback();
-      this.logger.error('Error processing data:', {
+      this.logger.error('Error processing batch:', {
         error: error.message,
         stack: error.stack,
-        data: JSON.stringify(data, null, 2)
+        sport,
+        batchTimestamp: data.headers?.['batch-timestamp']
       });
       throw error;
     } finally {
@@ -86,24 +96,32 @@ class DataProcessor {
         startTime: event.startTime || event.start_time,
         status: event.status,
         participants: event.participants || [],
-        odds: event.odds || []
+        odds: event.odds || [],
+        lastUpdated: Date.now()
       };
 
-      // Cache the event data with a 1-hour expiration
+      // Cache the event data with TTL
       await this.redis.set(eventKey, JSON.stringify(eventData), {
-        EX: 3600 // 1 hour in seconds
+        EX: this.CACHE_TTL
       });
 
-      // Add to sport index
-      await this.redis.sAdd(`sport:${event.sport}:events`, event.id);
+      // Add to sport index with TTL
+      const sportKey = `sport:${event.sport.toLowerCase()}:events`;
+      await this.redis.sAdd(sportKey, event.id);
+      await this.redis.expire(sportKey, this.CACHE_TTL);
 
-      // Add to competition index
-      await this.redis.sAdd(`competition:${event.competition}:events`, event.id);
+      // Add to competition index with TTL
+      const competitionKey = `competition:${event.competition.toLowerCase()}:events`;
+      await this.redis.sAdd(competitionKey, event.id);
+      await this.redis.expire(competitionKey, this.CACHE_TTL);
 
       this.logger.debug('Cached event data:', {
         eventId: event.id,
         sport: event.sport,
-        competition: event.competition
+        competition: event.competition,
+        sportKey,
+        competitionKey,
+        ttl: this.CACHE_TTL
       });
     } catch (error) {
       this.logger.error('Error caching event data:', {

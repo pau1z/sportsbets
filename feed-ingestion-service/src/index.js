@@ -8,9 +8,22 @@ const { FeedClient } = require('./clients/feedClient');
 const app = express();
 const port = process.env.PORT || 3000;
 
+const SUPPORTED_SPORTS = (process.env.SUPPORTED_SPORTS || 'football,basketball,tennis,hockey').split(',');
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10);
+const DEAD_LETTER_TOPIC = 'sports-feed-dead-letter';
+
 const kafka = new Kafka({
   clientId: 'feed-ingestion-service',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',')
+  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+  createTopics: {
+    topics: [
+      { topic: 'sports-feed-football', numPartitions: 1, replicationFactor: 1 },
+      { topic: 'sports-feed-basketball', numPartitions: 1, replicationFactor: 1 },
+      { topic: 'sports-feed-tennis', numPartitions: 1, replicationFactor: 1 },
+      { topic: 'sports-feed-hockey', numPartitions: 1, replicationFactor: 1 },
+      { topic: 'sports-feed-dead-letter', numPartitions: 1, replicationFactor: 1 }
+    ]
+  }
 });
 
 const logger = winston.createLogger({
@@ -57,58 +70,42 @@ app.post('/ingest', async (req, res) => {
       hasFeedData: !!feedData
     });
 
-    let data;
-
-    if (feedData) {
-      data = feedData;
-    } else if (feedUrl) {
-      data = await feedClient.fetchFeed(feedUrl);
-    } else {
+    let data = feedData || (feedUrl ? await feedClient.fetchFeed(feedUrl) : null);
+    if (!data) {
       throw new Error('Either feedUrl or feedData must be provided');
     }
 
-    let parsedData;
+    let parsedData = feedType === 'xml' ? 
+      await xmlParser.parse(data) : 
+      feedType === 'json' ? 
+        await jsonParser.parse(data) : 
+        null;
 
-    if (feedType === 'xml') {
-      parsedData = await xmlParser.parse(data);
-    } else if (feedType === 'json') {
-      parsedData = await jsonParser.parse(data);
-    } else {
-      throw new Error(`Unsupported feed type: ${feedType}`);
-    }
-
-    if (!parsedData || !parsedData.events || !Array.isArray(parsedData.events)) {
+    if (!parsedData?.events?.length) {
       throw new Error('Invalid parsed data format: missing events array');
     }
 
-    for (const event of parsedData.events) {
-      if (!event.id) {
-        throw new Error(`Event missing required ID field: ${JSON.stringify(event)}`);
-      }
+    const results = {
+      processed: 0,
+      invalid: 0,
+      bySport: {}
+    };
+
+    for (let i = 0; i < parsedData.events.length; i += BATCH_SIZE) {
+      const batch = parsedData.events.slice(i, i + BATCH_SIZE);
+      const batchResults = await processEventBatch(batch);
+      
+      results.processed += batchResults.processed;
+      results.invalid += batchResults.invalid;
+      Object.entries(batchResults.bySport).forEach(([sport, count]) => {
+        results.bySport[sport] = (results.bySport[sport] || 0) + count;
+      });
     }
-
-    logger.debug('Parsed data:', JSON.stringify(parsedData, null, 2));
-
-    const message = JSON.stringify(parsedData);
-
-    logger.debug('Sending to Kafka:', {
-      topic: 'sports-feed',
-      messageLength: message.length,
-      messagePreview: message.substring(0, 500) + '...'
-    });
-
-    await producer.send({
-      topic: 'sports-feed',
-      messages: [
-        { value: message }
-      ]
-    });
 
     res.json({ 
       status: 'success', 
       message: 'Feed processed successfully',
-      eventCount: parsedData.events.length,
-      firstEventId: parsedData.events[0]?.id
+      results
     });
   } catch (error) {
     logger.error('Error processing feed:', {
@@ -122,6 +119,73 @@ app.post('/ingest', async (req, res) => {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
+
+async function processEventBatch(events) {
+  const results = {
+    processed: 0,
+    invalid: 0,
+    bySport: {}
+  };
+
+  const validEvents = [];
+  const invalidEvents = [];
+
+  for (const event of events) {
+    if (!event.id || !event.sport) {
+      invalidEvents.push(event);
+      continue;
+    }
+
+    const sport = event.sport.toLowerCase().replace(/\s+/g, '-');
+
+    if (!SUPPORTED_SPORTS.includes(sport)) {
+      invalidEvents.push(event);
+      continue;
+    }
+
+    validEvents.push({ ...event, sport });
+    results.bySport[sport] = (results.bySport[sport] || 0) + 1;
+  }
+
+  // Send valid events to sport-specific topics
+  const sendPromises = Object.entries(
+    validEvents.reduce((acc, event) => {
+      if (!acc[event.sport]) acc[event.sport] = [];
+      acc[event.sport].push(event);
+      return acc;
+    }, {})
+  ).map(async ([sport, events]) => {
+    const topic = `sports-feed-${sport}`;
+    await producer.send({
+      topic,
+      messages: [{ 
+        value: JSON.stringify({ events }),
+        headers: {
+          'event-count': events.length.toString(),
+          'batch-timestamp': Date.now().toString()
+        }
+      }]
+    });
+    results.processed += events.length;
+  });
+
+  // Send invalid events to dead letter queue
+  if (invalidEvents.length > 0) {
+    await producer.send({
+      topic: DEAD_LETTER_TOPIC,
+      messages: [{
+        value: JSON.stringify({ 
+          events: invalidEvents,
+          reason: 'Invalid event format or unsupported sport'
+        })
+      }]
+    });
+    results.invalid = invalidEvents.length;
+  }
+
+  await Promise.all(sendPromises);
+  return results;
+}
 
 async function start() {
   try {

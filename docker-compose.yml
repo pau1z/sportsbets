@@ -100,6 +100,7 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CREATE_TOPICS: "sports-feed-football:1:1,sports-feed-basketball:1:1,sports-feed-tennis:1:1,sports-feed-hockey:1:1"
     depends_on:
       - zookeeper
     healthcheck:
