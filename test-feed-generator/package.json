@@ -1,0 +1,13 @@
+{
+  "name": "test-feed-generator",
+  "version": "1.0.0",
+  "description": "Test feed generator for sports betting data",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "winston": "^3.11.0"
+  }
+} 

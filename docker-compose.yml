@@ -42,6 +42,20 @@ services:
     networks:
       - sportsbet-network
 
+  test-feed-generator:
+    build:
+      context: ./test-feed-generator
+      dockerfile: Dockerfile
+    ports:
+      - "4004:3000"
+    environment:
+      - INGESTION_SERVICE_URL=http://feed-ingestion:3000
+      - INTERVAL_MS=5000
+    depends_on:
+      - feed-ingestion
+    networks:
+      - sportsbet-network
+
   # Kafka
   zookeeper:
     image: wurstmeister/zookeeper
