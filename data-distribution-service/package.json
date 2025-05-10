@@ -1,0 +1,24 @@
+{
+  "name": "data-distribution-service",
+  "version": "1.0.0",
+  "description": "Service for distributing sports betting data via REST API and WebSocket",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mysql2": "^3.6.5",
+    "redis": "^4.6.11",
+    "socket.io": "^4.7.2",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2"
+  }
+} 
