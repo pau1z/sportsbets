@@ -21,6 +21,27 @@ services:
       timeout: 5s
       retries: 5
 
+  # Data Processing Service
+  data-processing:
+    build: ./data-processing-service
+    ports:
+      - "4001:3000"
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=sportsbet
+      - MYSQL_PASSWORD=sportsbetpass
+      - MYSQL_DATABASE=sportsbet
+      - MYSQL_PORT=3307
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - sportsbet-network
+
   # Kafka
   zookeeper:
     image: wurstmeister/zookeeper
@@ -75,9 +96,25 @@ services:
     networks:
       - sportsbet-network
 
+  # Redis
+  redis:
+    image: redis:7.0
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sportsbet-network
+
 networks:
   sportsbet-network:
     driver: bridge
 
 volumes:
   mysql-data:
+  redis-data:

@@ -104,9 +104,6 @@ app.post('/ingest', async (req, res) => {
       ]
     });
 
-    const duration = (Date.now() - startTime) / 1000;
-    feedProcessingDuration.observe({ feed_type: feedType, status: 'success' }, duration);
-    
     res.json({ 
       status: 'success', 
       message: 'Feed processed successfully',
@@ -121,8 +118,7 @@ app.post('/ingest', async (req, res) => {
       hasFeedUrl: !!feedUrl,
       hasFeedData: !!feedData
     });
-    const duration = (Date.now() - startTime) / 1000;
-    feedProcessingDuration.observe({ feed_type: feedType, status: 'error' }, duration);
+
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
