@@ -6,7 +6,7 @@ const Redis = require('ioredis');
 const { DataProcessor } = require('./processors/dataProcessor');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 4001;
 
 // Initialize Kafka
 const kafka = new Kafka({
@@ -19,7 +19,7 @@ const consumer = kafka.consumer({ groupId: `data-processing-${process.env.SPORT_
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST || 'localhost',
   user: process.env.MYSQL_USER || 'sportsbet',
-  password: process.env.MYSQL_PASSWORD || 'sportsbetpass',
+  password: process.env.MYSQL_PASSWORD,
   database: process.env.MYSQL_DATABASE || 'sportsbet',
   port: process.env.MYSQL_PORT || 3306,
   waitForConnections: true,
@@ -59,7 +59,13 @@ const dataProcessor = new DataProcessor(pool, redis, logger);
 app.use(express.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.json({ 
+    status: 'healthy',
+    sport: process.env.SPORT_TYPE,
+    kafka: consumer ? 'connected' : 'disconnected',
+    redis: redis.status === 'ready',
+    mysql: pool.pool ? 'connected' : 'disconnected'
+  });
 });
 
 async function connectWithRetry(maxRetries = 5, delay = 5000) {

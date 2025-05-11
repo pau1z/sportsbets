@@ -14,10 +14,10 @@ RUN mkdir -p /app/logs
 
 # Set environment variables
 ENV NODE_ENV=production
-ENV PORT=4000
+ENV PORT=4001
 
 # Expose port
-EXPOSE 4000
+EXPOSE 4001
 
 # Start the service
 CMD ["node", "src/index.js"] 
