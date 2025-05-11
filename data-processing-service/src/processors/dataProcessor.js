@@ -101,18 +101,16 @@ class DataProcessor {
       };
 
       // Cache the event data with TTL
-      await this.redis.set(eventKey, JSON.stringify(eventData), {
-        EX: this.CACHE_TTL
-      });
+      await this.redis.setex(eventKey, this.CACHE_TTL, JSON.stringify(eventData));
 
       // Add to sport index with TTL
       const sportKey = `sport:${event.sport.toLowerCase()}:events`;
-      await this.redis.sAdd(sportKey, event.id);
+      await this.redis.sadd(sportKey, event.id);
       await this.redis.expire(sportKey, this.CACHE_TTL);
 
       // Add to competition index with TTL
       const competitionKey = `competition:${event.competition.toLowerCase()}:events`;
-      await this.redis.sAdd(competitionKey, event.id);
+      await this.redis.sadd(competitionKey, event.id);
       await this.redis.expire(competitionKey, this.CACHE_TTL);
 
       this.logger.debug('Cached event data:', {

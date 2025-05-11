@@ -2,34 +2,38 @@ const express = require('express');
 const { Kafka } = require('kafkajs');
 const mysql = require('mysql2/promise');
 const winston = require('winston');
-const { createClient } = require('redis');
+const Redis = require('ioredis');
 const { DataProcessor } = require('./processors/dataProcessor');
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Initialize Kafka
+const kafka = new Kafka({
+  clientId: `data-processing-${process.env.SPORT_TYPE}`,
+  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',')
+});
+
+const consumer = kafka.consumer({ groupId: `data-processing-${process.env.SPORT_TYPE}` });
 
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST || 'localhost',
   user: process.env.MYSQL_USER || 'sportsbet',
   password: process.env.MYSQL_PASSWORD || 'sportsbetpass',
   database: process.env.MYSQL_DATABASE || 'sportsbet',
+  port: process.env.MYSQL_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
 });
 
-const redis = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379'
+// Initialize Redis with automatic connection
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  retryStrategy: (times) => {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  }
 });
-
-redis.on('error', (err) => logger.error('Redis Client Error:', err));
-
-const kafka = new Kafka({
-  clientId: 'data-processing-service',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',')
-});
-
-const consumer = kafka.consumer({ groupId: 'data-processing-group' });
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'debug',
@@ -37,6 +41,7 @@ const logger = winston.createLogger({
     winston.format.timestamp(),
     winston.format.json()
   ),
+  defaultMeta: { service: `data-processing-${process.env.SPORT_TYPE}` },
   transports: [
     new winston.transports.Console({
       format: winston.format.combine(
@@ -63,11 +68,11 @@ async function connectWithRetry(maxRetries = 5, delay = 5000) {
   while (retries < maxRetries) {
     try {
       const connection = await pool.getConnection();
-
       connection.release();
       logger.info('Successfully connected to database');
 
-      await redis.connect();
+      // Test Redis connection
+      await redis.ping();
       logger.info('Successfully connected to Redis');
 
       return;
@@ -91,14 +96,16 @@ async function start() {
     await consumer.connect();
     logger.info('Connected to Kafka');
 
-    const supportedSports = ['football', 'basketball', 'tennis', 'hockey'];
-    const topics = supportedSports.map(sport => `sports-feed-${sport}`);
+    const SPORT_TYPE = process.env.SPORT_TYPE;
+    const KAFKA_TOPIC = process.env.KAFKA_TOPIC;
 
-    await Promise.all(topics.map(topic => 
-      consumer.subscribe({ topic, fromBeginning: true })
-    ));
+    if (!SPORT_TYPE || !KAFKA_TOPIC) {
+      logger.error('SPORT_TYPE and KAFKA_TOPIC environment variables are required');
+      process.exit(1);
+    }
 
-    logger.info('Subscribed to topics:', topics);
+    await consumer.subscribe({ topic: KAFKA_TOPIC, fromBeginning: true });
+    logger.info(`Subscribed to topic: ${KAFKA_TOPIC}`);
 
     await consumer.run({
       eachMessage: async ({ topic, partition, message }) => {

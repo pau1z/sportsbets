@@ -21,11 +21,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # Data Processing Service
-  data-processing:
+  # Data Processing Services - Split by Sport
+  data-processing-football:
     build: ./data-processing-service
     ports:
-      - "4001:3000"
+      - "4101:4001"
     environment:
       - NODE_ENV=production
       - KAFKA_BROKERS=kafka:9092
@@ -33,9 +33,89 @@ services:
       - MYSQL_USER=sportsbet
       - MYSQL_PASSWORD=sportsbetpass
       - MYSQL_DATABASE=sportsbet
-      - MYSQL_PORT=3307
+      - MYSQL_PORT=3306
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=debug
+      - SPORT_TYPE=football
+      - KAFKA_TOPIC=sports-feed-football
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sportsbet-network
+
+  data-processing-basketball:
+    build: ./data-processing-service
+    ports:
+      - "4102:4001"
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=sportsbet
+      - MYSQL_PASSWORD=sportsbetpass
+      - MYSQL_DATABASE=sportsbet
+      - MYSQL_PORT=3306
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - SPORT_TYPE=basketball
+      - KAFKA_TOPIC=sports-feed-basketball
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sportsbet-network
+
+  data-processing-tennis:
+    build: ./data-processing-service
+    ports:
+      - "4103:4001"
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=sportsbet
+      - MYSQL_PASSWORD=sportsbetpass
+      - MYSQL_DATABASE=sportsbet
+      - MYSQL_PORT=3306
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - SPORT_TYPE=tennis
+      - KAFKA_TOPIC=sports-feed-tennis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sportsbet-network
+
+  data-processing-hockey:
+    build: ./data-processing-service
+    ports:
+      - "4104:4001"
+    environment:
+      - NODE_ENV=production
+      - KAFKA_BROKERS=kafka:9092
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=sportsbet
+      - MYSQL_PASSWORD=sportsbetpass
+      - MYSQL_DATABASE=sportsbet
+      - MYSQL_PORT=3306
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - SPORT_TYPE=hockey
+      - KAFKA_TOPIC=sports-feed-hockey
     depends_on:
       mysql:
         condition: service_healthy
@@ -130,9 +210,10 @@ services:
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
       - sportsbet-network
 
